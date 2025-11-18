@@ -1,142 +1,121 @@
+# app.py
 import streamlit as st
 import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from io import StringIO
 
-st.set_page_config(page_title="CLV Calculator Advanced", layout="wide")
+st.set_page_config(page_title="CLV Simple App", layout="wide")
+st.title("📊 CLV Calculator — Input & Dashboard Sederhana")
+st.write("Masukkan data pelanggan, sistem akan menghitung CLV dan melakukan segmentasi otomatis.")
 
-st.title("📊 Customer Lifetime Value (CLV) Calculator — Advanced Version")
-st.write("Input data, edit, hapus, import CSV, dan simpan ke Google Sheets.")
-
-# -------------------------------
-# 🔐 GOOGLE SHEETS CONNECTION
-# -------------------------------
-st.sidebar.subheader("🔐 Google Sheet Settings")
-sheet_url = st.sidebar.text_input("Google Sheet URL")
-cred_file = st.sidebar.file_uploader("Upload Service Account JSON", type=["json"])
-
-if cred_file and sheet_url:
-    try:
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(
-            eval(cred_file.getvalue().decode()),
-            ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"],
-        )
-        client = gspread.authorize(creds)
-        sheet = client.open_by_url(sheet_url).sheet1
-        st.sidebar.success("Terhubung dengan Google Sheet ✔")
-    except Exception as e:
-        st.sidebar.error(f"Gagal Koneksi: {e}")
-        sheet = None
-else:
-    sheet = None
-
-# -------------------------------
-# 🔧 SESSION STATE for data
-# -------------------------------
+# -----------------------
+# session state init
+# -----------------------
 if "data" not in st.session_state:
-    st.session_state.data = []
-if "edit_index" not in st.session_state:
-    st.session_state.edit_index = None
+    st.session_state.data = []  # list of dicts: ID, Margin, Biaya_Akuisisi, CLV, Segment
 
-# -------------------------------
-# 📥 IMPORT CSV
-# -------------------------------
-st.subheader("📥 Import CSV")
-csv_file = st.file_uploader("Upload file CSV", type=["csv"])
+# -----------------------
+# Input form
+# -----------------------
+st.subheader("📝 Input Data Pelanggan")
+with st.form("input_form", clear_on_submit=True):
+    id_p = st.text_input("ID Pelanggan", max_chars=50)
+    margin = st.number_input("Total Margin (Rp)", min_value=0, step=1000, format="%d")
+    biaya = st.number_input("Biaya Akuisisi (Rp)", min_value=0, step=1000, format="%d")
+    submitted = st.form_submit_button("Tambah / Simpan")
 
+if submitted:
+    # simple CLV model
+    clv = int(margin) - int(biaya)
+    # simple segmentation (ubah sesuai kebutuhan)
+    if clv > 2500000:
+        seg = "High Value"
+    elif clv > 1000000:
+        seg = "Mid Value"
+    else:
+        seg = "Low Value"
+
+    st.session_state.data.append({
+        "ID": id_p or f"ID_{len(st.session_state.data)+1}",
+        "Margin": int(margin),
+        "Biaya_Akuisisi": int(biaya),
+        "CLV": clv,
+        "Segment": seg
+    })
+    st.success(f"Data pelanggan '{id_p or '—'}' ditambahkan (CLV = {clv:,}).")
+
+# -----------------------
+# Optional: import CSV
+# -----------------------
+st.subheader("📥 (Opsional) Import CSV")
+st.write("CSV harus mengandung kolom: ID, Margin, Biaya_Akuisisi")
+csv_file = st.file_uploader("Upload CSV", type=["csv"])
 if csv_file:
-    df_csv = pd.read_csv(csv_file)
-    if all(col in df_csv.columns for col in ["ID", "Margin", "Biaya_Akuisisi"]):
-        for _, row in df_csv.iterrows():
-            clv = row["Margin"] - row["Biaya_Akuisisi"]
-            seg = "High Value" if clv > 2500000 else "Mid Value" if clv > 1000000 else "Low Value"
-            st.session_state.data.append({
-                "ID": row["ID"],
-                "Margin": row["Margin"],
-                "Biaya_Akuisisi": row["Biaya_Akuisisi"],
-                "CLV": clv,
-                "Segment": seg
-            })
-        st.success("Import CSV berhasil!")
-    else:
-        st.error("CSV harus memiliki kolom: ID, Margin, Biaya_Akuisisi")
+    try:
+        df_csv = pd.read_csv(csv_file)
+        if all(col in df_csv.columns for col in ["ID", "Margin", "Biaya_Akuisisi"]):
+            for _, r in df_csv.iterrows():
+                clv = int(r["Margin"]) - int(r["Biaya_Akuisisi"])
+                if clv > 2500000:
+                    seg = "High Value"
+                elif clv > 1000000:
+                    seg = "Mid Value"
+                else:
+                    seg = "Low Value"
+                st.session_state.data.append({
+                    "ID": r["ID"],
+                    "Margin": int(r["Margin"]),
+                    "Biaya_Akuisisi": int(r["Biaya_Akuisisi"]),
+                    "CLV": clv,
+                    "Segment": seg
+                })
+            st.success("CSV berhasil diimport.")
+        else:
+            st.error("CSV harus memiliki kolom: ID, Margin, Biaya_Akuisisi")
+    except Exception as e:
+        st.error(f"Gagal membaca CSV: {e}")
 
-# -------------------------------
-# 📝 INPUT MANUAL + EDIT MODE
-# -------------------------------
-st.subheader("📝 Input / Edit Data Pelanggan")
-
-if st.session_state.edit_index is None:
-    id_val = st.text_input("ID Pelanggan")
-    margin_val = st.number_input("Total Margin", min_value=0, step=1000)
-    cost_val = st.number_input("Biaya Akuisisi", min_value=0, step=1000)
+# -----------------------
+# Data table & actions
+# -----------------------
+st.subheader("📄 Data Pelanggan")
+if len(st.session_state.data) == 0:
+    st.info("Belum ada data. Tambahkan melalui form atau import CSV.")
 else:
-    data = st.session_state.data[st.session_state.edit_index]
-    id_val = st.text_input("ID Pelanggan", value=data["ID"])
-    margin_val = st.number_input("Total Margin", min_value=0, step=1000, value=data["Margin"])
-    cost_val = st.number_input("Biaya Akuisisi", min_value=0, step=1000, value=data["Biaya_Akuisisi"])
-
-colA, colB = st.columns(2)
-
-if colA.button("Simpan"):
-    clv = margin_val - cost_val
-    seg = "High Value" if clv > 2500000 else "Mid Value" if clv > 1000000 else "Low Value"
-
-    new_data = {"ID": id_val, "Margin": margin_val, "Biaya_Akuisisi": cost_val, "CLV": clv, "Segment": seg}
-
-    if st.session_state.edit_index is None:
-        st.session_state.data.append(new_data)
-    else:
-        st.session_state.data[st.session_state.edit_index] = new_data
-        st.session_state.edit_index = None
-
-    st.success("Data disimpan!")
-
-if colB.button("Batal Edit"):
-    st.session_state.edit_index = None
-
-# -------------------------------
-# 📄 TABEL DATA + EDIT/HAPUS
-# -------------------------------
-st.subheader("📄 Data Pelanggan (Editable)")
-
-df = pd.DataFrame(st.session_state.data)
-
-if len(df) > 0:
+    df = pd.DataFrame(st.session_state.data)
     st.dataframe(df, use_container_width=True)
 
-    for i, row in df.iterrows():
-        col1, col2 = st.columns(2)
-        if col1.button(f"✏️ Edit {row['ID']}"):
-            st.session_state.edit_index = i
-        if col2.button(f"🗑️ Hapus {row['ID']}"):
-            st.session_state.data.pop(i)
-            st.experimental_rerun()
+    # simple delete per baris (index-based)
+    to_delete = st.multiselect("Pilih baris (ID) untuk dihapus", options=df["ID"].tolist())
+    if st.button("Hapus Terpilih") and to_delete:
+        st.session_state.data = [d for d in st.session_state.data if d["ID"] not in to_delete]
+        st.success("Baris terhapus.")
+        st.experimental_rerun()
 
-# -------------------------------
-# 📈 DASHBOARD
-# -------------------------------
-if len(df) > 0:
+    # download csv
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Data (CSV)", data=csv_bytes, file_name="clv_data.csv", mime="text/csv")
+
+# -----------------------
+# Dashboard
+# -----------------------
+if len(st.session_state.data) > 0:
     st.subheader("📊 Dashboard")
-    seg_count = df["Segment"].value_counts()
-    st.bar_chart(seg_count)
+    df = pd.DataFrame(st.session_state.data)
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns([1,1,1])
     col1.metric("Total Pelanggan", len(df))
-    col2.metric("Rata-rata CLV", int(df["CLV"].mean()))
+    col2.metric("Rata-rata CLV", f"Rp {int(df['CLV'].mean()):,}")
+    col3.metric("Median CLV", f"Rp {int(df['CLV'].median()):,}")
 
-# -------------------------------
-# 💾 SIMPAN KE GOOGLE SHEETS
-# -------------------------------
-st.subheader("💾 Simpan ke Google Sheets")
-if sheet:
-    if st.button("Upload Data"):
-        try:
-            sheet.clear()
-            sheet.update([df.columns.values.tolist()] + df.values.tolist())
-            st.success("Data berhasil disimpan ke Google Sheets!")
-        except Exception as e:
-            st.error(f"Gagal upload: {e}")
-else:
-    st.info("Isi Google Sheet URL & upload credentials untuk menyimpan data.")
+    st.markdown("**Distribusi Segmentasi**")
+    seg_count = df["Segment"].value_counts().rename_axis("Segment").reset_index(name="Jumlah")
+    st.bar_chart(data=seg_count.set_index("Segment"))
+
+    st.markdown("**Tabel ringkasan per segmen**")
+    summary = df.groupby("Segment").agg(
+        Jumlah=("ID", "count"),
+        Avg_CLV=("CLV", "mean"),
+        Median_CLV=("CLV", "median")
+    ).reset_index()
+    st.table(summary.style.format({"Avg_CLV":"{:,}", "Median_CLV":"{:,}"}))
+
+st.caption("CLV simple model: CLV = Margin - Biaya Akuisisi. Ubah segmentasi / aturan jika diperlukan.")
